@@ -4,16 +4,22 @@ import { FreightContainer } from '@/hooks/useFreight';
 
 interface LiveFeedProps {
   trains: AmtrakTrain[];
-  containers: FreightContainer[];
+  containers: (FreightContainer & { progress?: number; region?: string; currentPosition?: [number, number] })[];
   trainsLoading: boolean;
   freightLoading: boolean;
+  selectedId: string | null;
+  onSelectTrain: (id: string) => void;
+  onSelectContainer: (id: string) => void;
 }
 
-export const LiveFeed: React.FC<LiveFeedProps> = ({ 
-  trains, 
-  containers, 
-  trainsLoading, 
-  freightLoading 
+export const LiveFeed: React.FC<LiveFeedProps> = ({
+  trains,
+  containers,
+  trainsLoading,
+  freightLoading,
+  selectedId,
+  onSelectTrain,
+  onSelectContainer,
 }) => {
   const [activeTab, setActiveTab] = useState<'amtrak' | 'logistics'>('amtrak');
 
@@ -51,7 +57,15 @@ export const LiveFeed: React.FC<LiveFeedProps> = ({
               {trainsLoading && <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse"></span>}
             </div>
             {trains.map(train => (
-              <div key={train.trainID} className="bg-zinc-800/80 border border-zinc-700 p-2 rounded text-xs flex flex-col gap-1 transition hover:bg-zinc-700 hover:border-cyan-500/50">
+              <div
+                key={train.trainID}
+                onClick={() => onSelectTrain(train.trainID)}
+                className={`border p-2 rounded text-xs flex flex-col gap-1 transition cursor-pointer ${
+                  selectedId === train.trainID
+                    ? 'bg-zinc-700/80 border-cyan-400 shadow-[0_0_8px_rgba(34,211,238,0.5)]'
+                    : 'bg-zinc-800/80 border-zinc-700 hover:bg-zinc-700 hover:border-cyan-500/50'
+                }`}
+              >
                 <div className="flex justify-between items-center">
                   <span className="font-bold text-gray-200">{train.routeName} #{train.trainNum}</span>
                   <span className="text-emerald-400">{Math.round(train.velocity)} mph</span>
@@ -68,28 +82,35 @@ export const LiveFeed: React.FC<LiveFeedProps> = ({
           </div>
         ) : (
           <div className="flex flex-col gap-2">
-             <div className="flex items-center justify-between mb-1">
+            <div className="flex items-center justify-between mb-1">
               <h3 className="text-amber-500 font-mono text-[10px] uppercase">Tracked T49 Logistics</h3>
               {freightLoading && <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse"></span>}
             </div>
             {containers.map(container => (
-              <div key={container.containerId} className="bg-zinc-800/80 border border-zinc-700 p-2 rounded text-xs flex flex-col gap-1 transition hover:bg-zinc-700 hover:border-amber-500/50">
+              <div
+                key={container.containerId}
+                onClick={() => onSelectContainer(container.containerId)}
+                className={`border p-2 rounded text-xs flex flex-col gap-1 transition cursor-pointer ${
+                  selectedId === container.containerId
+                    ? 'bg-zinc-700/80 border-amber-400 shadow-[0_0_8px_rgba(251,191,36,0.5)]'
+                    : 'bg-zinc-800/80 border-zinc-700 hover:bg-zinc-700 hover:border-amber-500/50'
+                }`}
+              >
                 <div className="flex justify-between items-center">
                   <span className="font-extrabold text-amber-200">{container.containerId}</span>
                   <span className="text-amber-500 font-mono text-[10px]">{container.eventType.split('.').pop()}</span>
                 </div>
                 <div className="text-zinc-300 font-semibold">{container.origin.name} → {container.destination.name}</div>
-                
-                {/* Progress Bar for Logistics */}
+
                 <div className="w-full bg-zinc-900 h-1 rounded-full mt-2 relative overflow-hidden">
-                  <div 
+                  <div
                     className="absolute top-0 left-0 h-full bg-amber-500 transition-all duration-1000"
-                    style={{ width: `${(container as any).progress || 0}%` }}
+                    style={{ width: `${container.progress ?? 0}%` }}
                   />
                 </div>
 
                 <div className="text-zinc-500 flex justify-between items-center text-[10px] font-mono mt-1">
-                  <span>Progress: {Math.round((container as any).progress || 0)}%</span>
+                  <span>Progress: {Math.round(container.progress ?? 0)}%</span>
                   <span>ETA: {new Date(container.eta).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
                 </div>
               </div>

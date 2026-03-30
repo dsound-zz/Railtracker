@@ -5,7 +5,6 @@ export interface SnappedTrack {
   coordinates: Position;
   properties: Record<string, any>;
   distance: number;
-  featureIndex: number; // Important for jitter threshold
 }
 
 const THRESHOLD_MILES = 0.031; // ~50 meters
@@ -19,9 +18,9 @@ const THRESHOLD_MILES = 0.031; // ~50 meters
  * @returns {SnappedTrack} - Object containing snapped coordinates, properties (like OWNER), distance, and line index
  */
 export const snapToTrack = (
-  gpsCoordinate: Position, 
+  gpsCoordinate: Position,
   narnData: FeatureCollection | null,
-  previousFeatureIndex?: number
+  previousCoordinates?: [number, number]
 ): SnappedTrack | null => {
   if (!narnData || narnData.features.length === 0) {
     return null;
@@ -29,24 +28,17 @@ export const snapToTrack = (
 
   try {
     const rawPoint = turf.point(gpsCoordinate);
-    
-    // If we have a previously snapped track, check if the raw point is still within 50m of it.
-    if (previousFeatureIndex !== undefined && previousFeatureIndex >= 0 && previousFeatureIndex < narnData.features.length) {
-      const prevFeature = narnData.features[previousFeatureIndex];
-      if (prevFeature.geometry && (prevFeature.geometry.type === 'LineString' || prevFeature.geometry.type === 'MultiLineString')) {
-        // @ts-ignore
-        const pointOnPrevLine = turf.nearestPointOnLine(prevFeature, rawPoint, { units: 'miles' });
-        const distanceToPrev = pointOnPrevLine.properties.dist;
-        
-        // Anti-jitter: Lock to previous feature if within 50 meters
-        if (distanceToPrev !== undefined && distanceToPrev <= THRESHOLD_MILES) {
-          return {
-            coordinates: pointOnPrevLine.geometry.coordinates,
-            properties: prevFeature.properties || {},
-            distance: distanceToPrev,
-            featureIndex: previousFeatureIndex
-          };
-        }
+
+    // Anti-jitter: if GPS hasn't moved beyond threshold from the last snapped position,
+    // lock to the previous snapped coordinates (stable across narnData replacements).
+    if (previousCoordinates) {
+      const distanceToPrev = turf.distance(rawPoint, turf.point(previousCoordinates), { units: 'miles' });
+      if (distanceToPrev <= THRESHOLD_MILES) {
+        return {
+          coordinates: previousCoordinates,
+          properties: {},
+          distance: distanceToPrev,
+        };
       }
     }
 
@@ -74,7 +66,6 @@ export const snapToTrack = (
         coordinates: snappedCoords,
         properties: narnData.features[closestFeatureIndex].properties || {},
         distance: minDistance,
-        featureIndex: closestFeatureIndex
       };
     }
     
