@@ -16,7 +16,6 @@ export const TrackLayer = () => {
   // CSX: #00529B (Blue Neon)
   // Default: #666666
   
-  // This uses Mapbox Style expressions to look up the OWNER property.
   const trackLineStyle: LayerProps = {
     id: 'narn-tracks-line',
     type: 'line',
@@ -28,7 +27,7 @@ export const TrackLayer = () => {
     paint: {
       'line-color': [
         'match',
-        ['get', 'OWNER'],
+        ['get', 'RROWNER1'],
         'UP', '#FFD700',
         'BNSF', '#EC7014',
         'CSX', '#00529B',
@@ -52,7 +51,7 @@ export const TrackLayer = () => {
     paint: {
       'line-color': [
         'match',
-        ['get', 'OWNER'],
+        ['get', 'RROWNER1'],
         'UP', '#FFD700',
         'BNSF', '#EC7014',
         'CSX', '#00529B',

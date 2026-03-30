@@ -9,7 +9,7 @@ import type { FeatureCollection } from 'geojson';
 let narnCache: FeatureCollection | null = null;
 
 // The current mock dataset, which will later be replaced by the 150MB file
-const NARN_DATA_PATH = path.join(process.cwd(), 'public', 'data', 'narn_dummy.geojson');
+const NARN_DATA_PATH = path.join(process.cwd(), 'public', 'data', 'NTAD_North_American_Rail_Network_Lines_-2809319059146035817.geojson');
 
 /**
  * Server Action to fetch and filter the NARN dataset strictly to the user's viewport bounding box.

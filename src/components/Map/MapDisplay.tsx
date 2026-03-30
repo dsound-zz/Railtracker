@@ -1,12 +1,14 @@
 'use client';
 
-import React, { useState, useCallback, useMemo, useRef } from 'react';
-import Map, { NavigationControl, Source, Layer, LayerProps } from 'react-map-gl/mapbox';
+import React, { useState, useCallback, useMemo, useRef, useEffect } from 'react';
+import Map, { NavigationControl, Source, Layer, LayerProps, Marker } from 'react-map-gl/mapbox';
 import { TrackLayer } from './TrackLayer';
 import { useTrackContext } from '@/context/TrackContext';
 import { useAmtrak } from '@/hooks/useAmtrak';
-import { snapToTrack } from '@/utils/geoUtils';
+import { useFreight } from '@/hooks/useFreight';
+import { snapToTrack, interpolateFreightPosition, findJunctions } from '@/utils/geoUtils';
 import { playSquelchSound } from '@/utils/audio';
+import { LiveFeed } from './LiveFeed';
 import 'mapbox-gl/dist/mapbox-gl.css';
 
 // You will provide this in your .env.local file
@@ -15,9 +17,12 @@ const MAPBOX_TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
 export const MapDisplay = () => {
   const { narnData, loading: trackLoading, error: trackError, updateBounds } = useTrackContext();
   const { trains, loading: trainsLoading, error: trainsError } = useAmtrak();
+  const { containers, loading: freightLoading } = useFreight();
   
+  // Track regions for audio triggers
+  const previousRegionsRef = useRef<Record<string, string>>({});
+
   // Ref to track where a train was previously snapped to reduce jumping
-  // and detect when it moves to a completely new block (OWNER)
   const previousSnapsRef = useRef<Record<string, { owner: string; featureIndex: number }>>({});
   
   // Starting viewport near Chicago where our dummy tracks reside
@@ -54,14 +59,13 @@ export const MapDisplay = () => {
       const prevSnap = previousSnapsRef.current[train.trainID];
       const snapped = snapToTrack([train.lon, train.lat], narnData, prevSnap?.featureIndex);
       
-      const newOwner = snapped?.properties?.OWNER || '';
+      const newOwner = snapped?.properties?.RROWNER1 || '';
 
       // Play ATC sound if crossing into a distinctly new Class 1 Railroad block
       if (newOwner && prevSnap && prevSnap.owner && prevSnap.owner !== newOwner) {
         playSquelchSound();
       }
 
-      // Record snapshot state for anti-jitter tracking
       if (snapped) {
         previousSnapsRef.current[train.trainID] = { 
           owner: newOwner, 
@@ -69,20 +73,60 @@ export const MapDisplay = () => {
         };
       }
 
-      return {
-        ...train,
-        snapped
-      };
+      return { ...train, snapped };
     });
   }, [trains, narnData]);
+
+  // Task: INTERPOLATE FREIGHT POSITIONS
+  // Task: DISTRICT-BASED AUDIO TRIGGER (FRA_REGION)
+  const ghostTrains = useMemo(() => {
+    if (!containers.length) return [];
+
+    return containers.map(container => {
+      const pos = interpolateFreightPosition(
+        container.startTime,
+        container.eta,
+        container.pathGeoJSON
+      );
+
+      if (pos) {
+        // Calculate Progress Percentage for the dispatcher
+        const now = Date.now();
+        const start = new Date(container.startTime).getTime();
+        const end = new Date(container.eta).getTime();
+        const progress = Math.min(100, Math.max(0, ((now - start) / (end - start)) * 100));
+
+        // Use snapToTrack to find the closest segment's FRADISTRCT
+        // This helps simulate a real dispatcher hearing a squelch upon region handoff
+        const snapped = snapToTrack(pos, narnData);
+        const currentRegion = snapped?.properties?.FRADISTRCT || 'Unknown/Buffer';
+        const previousRegion = previousRegionsRef.current[container.containerId];
+
+        if (currentRegion !== 'Unknown/Buffer' && previousRegion && previousRegion !== currentRegion) {
+          playSquelchSound();
+          console.log(`[Dispatch] Container ${container.containerId} entering District: ${currentRegion}`);
+        }
+
+        previousRegionsRef.current[container.containerId] = currentRegion;
+
+        return {
+          ...container,
+          currentPosition: pos,
+          progress,
+          region: currentRegion
+        };
+      }
+      return null;
+    }).filter(Boolean);
+  }, [containers, narnData]);
 
   // Convert snapped trains into GeoJSON format for Mapbox Source
   const trainGeoJSON = useMemo(() => {
     return {
       type: 'FeatureCollection' as const,
       features: snappedTrains
-        .filter(t => t.snapped !== null)
-        .map(t => ({
+        .filter((t: any) => t.snapped !== null)
+        .map((t: any) => ({
           type: 'Feature' as const,
           geometry: {
             type: 'Point' as const,
@@ -92,35 +136,41 @@ export const MapDisplay = () => {
             trainID: t.trainID,
             routeName: t.routeName,
             velocity: t.velocity,
-            owner: t.snapped!.properties?.OWNER || 'Unknown'
+            owner: t.snapped!.properties?.RROWNER1 || 'Unknown'
           }
         }))
     };
   }, [snappedTrains]);
 
-  // Glowing Circle Layer style for active trains
+  const freightGeoJSON = useMemo(() => {
+    return {
+      type: 'FeatureCollection' as const,
+      features: ghostTrains.map((gt: any) => ({
+        type: 'Feature' as const,
+        geometry: {
+          type: 'Point' as const,
+          coordinates: gt!.currentPosition
+        },
+        properties: {
+          containerId: gt!.containerId,
+          region: gt!.region,
+          isArrived: gt!.eventType === 'container.transport.rail_arrived'
+        }
+      }))
+    };
+  }, [ghostTrains]);
+
+  // Layer Styles
   const trainLayerStyle: LayerProps = {
     id: 'amtrak-trains',
     type: 'circle',
     source: 'trains-source',
     paint: {
       'circle-radius': 8,
-      'circle-color': '#00FFFF', // Cyan pulsing color
+      'circle-color': '#00FFFF',
       'circle-opacity': 0.8,
       'circle-stroke-width': 2,
       'circle-stroke-color': '#FFFFFF'
-    }
-  };
-
-  const trainGlowStyle: LayerProps = {
-    id: 'amtrak-trains-glow',
-    type: 'circle',
-    source: 'trains-source',
-    paint: {
-      'circle-radius': 16,
-      'circle-color': '#00FFFF',
-      'circle-opacity': 0.3,
-      'circle-blur': 0.5
     }
   };
 
@@ -133,19 +183,14 @@ export const MapDisplay = () => {
     );
   }
 
-  const isLoading = trackLoading;
-  const error = trackError || trainsError;
-
   return (
     <div className="relative w-full h-screen overflow-hidden">
-      {/* Loading Overlay */}
-      {isLoading && (
+      {trackLoading && (
         <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm text-cyan-400 font-mono text-xl animate-pulse pointer-events-none">
           LOADING DISPATCH DIRECTORY...
         </div>
       )}
       
-      {/* Mapbox Canvas */}
       <Map
         {...viewState}
         onMove={onMove}
@@ -158,65 +203,47 @@ export const MapDisplay = () => {
         <NavigationControl position="bottom-right" />
         <TrackLayer />
         
-        {/* Render trains if we have them */}
         {trainGeoJSON.features.length > 0 && (
           <Source id="trains-source" type="geojson" data={trainGeoJSON}>
-            <Layer {...trainGlowStyle} />
             <Layer {...trainLayerStyle} />
           </Source>
         )}
+
+        {/* Task 3: PULSE MARKERS FOR GHOST TRAINS */}
+        {ghostTrains.map((gt: any) => (
+           <Marker 
+             key={`ghost-${gt.containerId}`} 
+             longitude={gt.currentPosition[0]} 
+             latitude={gt.currentPosition[1]}
+             anchor="center"
+           >
+             <div className={gt.eventType === 'container.transport.rail_arrived' ? 'ping-animation w-12 h-12' : 'freight-marker-pulse'}>
+               {/* Tooltip for Region */}
+               <div className="absolute -top-10 left-1/2 -translate-x-1/2 bg-zinc-900 text-[10px] text-amber-500 font-mono px-2 py-1 rounded border border-amber-500/30 whitespace-nowrap opacity-0 hover:opacity-100 transition-opacity">
+                 {gt.region} | {Math.round(gt.progress)}%
+               </div>
+             </div>
+           </Marker>
+        ))}
       </Map>
 
-      {/* Decorative Overlay for HUD */}
-      <div className="absolute top-4 left-4 z-40 bg-zinc-900/80 p-4 rounded border border-zinc-700 backdrop-blur pointer-events-none w-80 max-h-[80vh] flex flex-col">
-        <h2 className="text-emerald-400 font-mono text-lg font-bold tracking-widest uppercase">RailTracker Dispatch</h2>
-        
-        <div className="text-xs font-mono text-zinc-400 mt-2 flex flex-col gap-1 shrink-0 pb-4 border-b border-zinc-700">
-          <div className="flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-[#FFD700] shadow-[0_0_8px_#FFD700]"></span> UP Mainline</div>
-          <div className="flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-[#EC7014] shadow-[0_0_8px_#EC7014]"></span> BNSF Transcon</div>
-          <div className="flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-[#00529B] shadow-[0_0_8px_#00529B]"></span> CSX Eastern Line</div>
-        </div>
-
-        {/* List Active Amtrak Trains */}
-        <div className="mt-4 flex-1 overflow-y-auto pointer-events-auto pr-2 custom-scrollbar">
-          <div className="flex items-center justify-between mb-2">
-            <h3 className="text-cyan-400 font-mono text-sm leading-none">Active network assets</h3>
-            {trainsLoading && <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse"></span>}
-          </div>
-          
-          <div className="flex flex-col gap-2">
-            {snappedTrains.slice(0, 15).map(train => {
-              const owner = train.snapped?.properties?.OWNER;
-              return (
-                <div key={train.trainID} className="bg-zinc-800/80 border border-zinc-700 p-2 rounded text-xs flex flex-col gap-1 transition hover:bg-zinc-700">
-                  <div className="flex justify-between items-center">
-                    <span className="font-bold text-gray-200">{train.routeName} #{train.trainNum}</span>
-                    <span className="text-emerald-400">{Math.round(train.velocity)} mph</span>
-                  </div>
-                  <div className="text-zinc-400 flex justify-between items-center text-[10px] uppercase">
-                    <span>{owner ? `ON ${owner}` : 'OFF GRID'}</span>
-                    <span className="text-cyan-600 font-mono">{train.heading}</span>
-                  </div>
-                </div>
-              );
-            })}
-            {snappedTrains.length > 15 && (
-              <div className="text-zinc-500 text-xs text-center py-2 italic font-mono">
-                + {snappedTrains.length - 15} others tracked...
-              </div>
-            )}
-            {snappedTrains.length === 0 && !trainsLoading && (
-              <div className="text-zinc-500 text-xs italic py-2">No active assets found.</div>
-            )}
-          </div>
-        </div>
+      {/* Task 3: UPDATED LOGISTICS SIDEBAR */}
+      <div className="absolute top-4 left-4 z-40 w-80 max-h-[90vh] flex flex-col pointer-events-none">
+        <LiveFeed 
+          trains={snappedTrains} 
+          containers={ghostTrains as any} 
+          trainsLoading={trainsLoading} 
+          freightLoading={freightLoading} 
+        />
       </div>
       
-      {error && (
+      {(trackError || trainsError) && (
         <div className="absolute top-4 right-4 z-40 bg-red-900/80 px-4 py-2 border border-red-500 rounded text-white font-mono text-sm max-w-sm">
-          Tracking Network Fault: {error.message || 'Unable to sync dispatch.'}
+          Tracking Network Fault: {(trackError?.message || trainsError?.message) || 'Unable to sync dispatch.'}
         </div>
       )}
     </div>
   );
 };
+
+

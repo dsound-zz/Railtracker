@@ -84,3 +84,82 @@ export const snapToTrack = (
     return null;
   }
 };
+
+/**
+ * Interpolates the position of a 'Ghost Train' based on current time
+ * relative to the start time and ETA.
+ * 
+ * @param startTime - UTC string or timestamp when departure happened
+ * @param eta - UTC string or timestamp of estimated arrival
+ * @param pathGeoJSON - LineString of the path taken
+ * @returns {Position | null} - Current [lng, lat] snapped to the path
+ */
+export const interpolateFreightPosition = (
+  startTime: string | number,
+  eta: string | number,
+  pathGeoJSON: any
+): Position | null => {
+  if (!pathGeoJSON || !pathGeoJSON.coordinates || pathGeoJSON.coordinates.length < 2) {
+    return null;
+  }
+
+  const start = new Date(startTime).getTime();
+  const end = new Date(eta).getTime();
+  const now = Date.now();
+
+  if (now <= start) return pathGeoJSON.coordinates[0];
+  if (now >= end) return pathGeoJSON.coordinates[pathGeoJSON.coordinates.length - 1];
+
+  const totalDuration = end - start;
+  const elapsed = now - start;
+  const fraction = elapsed / totalDuration;
+
+  try {
+    const totalDistance = turf.length(pathGeoJSON, { units: 'miles' });
+    const alongDistance = totalDistance * fraction;
+    
+    const point = turf.along(pathGeoJSON, alongDistance, { units: 'miles' });
+    return point.geometry.coordinates;
+  } catch (error) {
+    console.error('Failed to interpolate freight position:', error);
+    return null;
+  }
+};
+
+/**
+ * Finds all nodes in the rail network that act as major junctions
+ * (where 3 or more rail lines meet).
+ * 
+ * @param narnData - FeatureCollection of rail lines
+ * @returns {Set<string>} - Set of "lng,lat" strings representing junctions
+ */
+export const findJunctions = (narnData: FeatureCollection | null): Set<string> => {
+  if (!narnData) return new Set();
+
+  const nodeCountMap = new Map<string, number>();
+
+  narnData.features.forEach(feature => {
+    if (feature.geometry && (feature.geometry.type === 'LineString' || feature.geometry.type === 'MultiLineString')) {
+      const coords = feature.geometry.type === 'LineString' 
+        ? feature.geometry.coordinates 
+        : (feature.geometry.coordinates[0] as Position[]); // Simple MultiLineString handle
+
+      // We only care about start/end nodes for basic topology
+      const start = coords[0].join(',');
+      const end = coords[coords.length - 1].join(',');
+
+      nodeCountMap.set(start, (nodeCountMap.get(start) || 0) + 1);
+      nodeCountMap.set(end, (nodeCountMap.get(end) || 0) + 1);
+    }
+  });
+
+  const junctions = new Set<string>();
+  for (const [coordStr, count] of nodeCountMap.entries()) {
+    if (count >= 3) {
+      junctions.add(coordStr);
+    }
+  }
+
+  return junctions;
+};
+
