@@ -71,7 +71,9 @@ export const useFreight = () => {
           type: 'LineString',
           coordinates: [
             [-87.35, 41.59], // Gary Intermodal
-            [-87.50, 41.72], // Hammond/Hegewisch
+            [-87.50, 41.61], // Hammond
+            [-87.62, 41.65], // South Chicago / Calumet (west of lake shore)
+            [-87.64, 41.76], // Bridgeport
             [-87.64, 41.88]  // Chicago Union Station
           ]
         }
