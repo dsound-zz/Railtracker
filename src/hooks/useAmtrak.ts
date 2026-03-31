@@ -12,26 +12,30 @@ export interface AmtrakTrain {
   provider: string;
 }
 
+export type FeedStatus = 'live' | 'stale' | 'offline' | 'loading';
+
 export const useAmtrak = () => {
   const [trains, setTrains] = useState<AmtrakTrain[]>([]);
-  const [loading, setLoading] = useState<boolean>(true);
-  const [error, setError] = useState<Error | null>(null);
+  const [feedStatus, setFeedStatus] = useState<FeedStatus>('loading');
 
   useEffect(() => {
     let isMounted = true;
 
     const fetchAmtrakData = async () => {
       try {
-        const response = await fetch('https://api.amtraker.com/v3/trains');
-        if (!response.ok) {
-          throw new Error(`Amtrak API error: ${response.statusText}`);
-        }
+        const response = await fetch('/api/amtrak');
+        const statusHeader = response.headers.get('X-Feed-Status') ?? 'live';
+
+        // Derive feed status from header
+        const status: FeedStatus = statusHeader === 'offline'
+          ? 'offline'
+          : statusHeader.startsWith('stale')
+          ? 'stale'
+          : 'live';
+
         const data = await response.json();
-        
-        // The Amtraker v3 API returns an object where keys are train numbers (or IDs)
-        // and values are arrays of train objects. We need to flatten this.
+
         const allTrains: AmtrakTrain[] = [];
-        
         for (const key in data) {
           if (Array.isArray(data[key])) {
             data[key].forEach((train: any) => {
@@ -41,31 +45,23 @@ export const useAmtrak = () => {
             });
           }
         }
-        
+
         if (isMounted) {
-          setTrains(allTrains);
-          setLoading(false);
-          setError(null);
+          // Only replace trains if we actually got some — keeps map populated during blips
+          if (allTrains.length > 0) setTrains(allTrains);
+          setFeedStatus(status);
         }
-      } catch (err: any) {
-        if (isMounted) {
-          console.error('Failed to fetch Amtrak data:', err);
-          setError(err);
-          setLoading(false);
-        }
+      } catch (err) {
+        // Network-level failure (fetch itself threw) — keep existing trains, mark offline
+        console.warn('[useAmtrak] fetch failed:', err);
+        if (isMounted) setFeedStatus('offline');
       }
     };
 
     fetchAmtrakData();
-    
-    // Fetch every 30 seconds
     const interval = setInterval(fetchAmtrakData, 30000);
-    
-    return () => {
-      isMounted = false;
-      clearInterval(interval);
-    };
+    return () => { isMounted = false; clearInterval(interval); };
   }, []);
 
-  return { trains, loading, error };
+  return { trains, feedStatus };
 };
